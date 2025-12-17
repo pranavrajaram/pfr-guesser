@@ -31,7 +31,7 @@ interface GuessResult {
 type GameMode = "daily" | "unlimited"
 
 // Use environment variable for API URL
-const API_URL = 'http://localhost:8000' || process.env.NEXT_PUBLIC_API_URL
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 export default function QBGuessingGame() {
   const MAX_GUESSES = 8
@@ -261,7 +261,114 @@ ${window.location.origin}`
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
-      <div className="container mx-auto px-4 py-8 max-w-6xl">
+      <div className="container mx-auto px-4 py-8 max-w-6xl relative">
+        {/* Help Button - Top Right */}
+        <Button 
+          variant="ghost" 
+          size="icon" 
+          onClick={() => setShowHelp(p => !p)}
+          className="fixed top-4 right-4 z-40 w-12 h-12 rounded-full bg-slate-800/90 hover:bg-slate-700 border-2 border-slate-600 shadow-lg hover:shadow-xl transition-all hover:scale-110"
+        >
+          <span className="text-2xl font-bold text-slate-200">?</span>
+        </Button>
+
+        {/* Help Modal */}
+        {showHelp && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in" onClick={() => setShowHelp(false)}>
+            <Card className="relative max-w-2xl w-full bg-gradient-to-br from-slate-800 via-slate-900 to-slate-800 border-2 border-slate-700 shadow-2xl rounded-3xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+              {/* Decorative gradient overlay */}
+              <div className="absolute inset-0 bg-gradient-to-br from-blue-500/10 via-indigo-500/10 to-purple-500/10 pointer-events-none" />
+              
+              <div className="relative p-8 sm:p-10">
+                {/* Header */}
+                <div className="text-center mb-6">
+                  <h2 className="text-4xl sm:text-5xl font-black mb-3 bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-400 bg-clip-text text-transparent">
+                    How to Play
+                  </h2>
+                  <p className="text-slate-300 text-lg">
+                    Guess the quarterback from their career stats
+                  </p>
+                </div>
+
+                {/* Instructions */}
+                <div className="space-y-4 mb-8 max-h-96 overflow-y-auto pr-2">
+                  <div className="flex gap-4 p-4 rounded-2xl bg-slate-800/50 border border-slate-700">
+                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-r from-blue-500 to-indigo-500 flex items-center justify-center text-white font-bold text-sm">
+                      1
+                    </div>
+                    <div className="flex-1">
+                      <h3 className="text-white font-semibold mb-1">Make Your Guess</h3>
+                      <p className="text-slate-300 text-sm">
+                        Type a quarterback's name in the input field. You have <span className="font-bold text-white">{MAX_GUESSES} guesses</span> to find the correct player. The current player pool is all quarterbacks with at least 2,000 passing yards since 2010.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-4 p-4 rounded-2xl bg-slate-800/50 border border-slate-700">
+                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-r from-yellow-500 to-orange-500 flex items-center justify-center text-white font-bold text-sm">
+                      2
+                    </div>
+                    <div className="flex-1">
+                      <h3 className="text-white font-semibold mb-1">Use Hints</h3>
+                      <p className="text-slate-300 text-sm">
+                        Click the hint buttons to reveal <span className="font-bold text-white">Seasons</span>, <span className="font-bold text-white">Teams</span>, or <span className="font-bold text-white">Awards</span>.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-4 p-4 rounded-2xl bg-slate-800/50 border border-slate-700">
+                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-r from-green-500 to-emerald-500 flex items-center justify-center text-white font-bold text-sm">
+                      3
+                    </div>
+                    <div className="flex-1">
+                      <h3 className="text-white font-semibold mb-1">Get Feedback</h3>
+                      <p className="text-slate-300 text-sm mb-2">
+                        After each guess, you'll see color-coded feedback:
+                      </p>
+                      <div className="space-y-2 mt-2">
+                        <div className="flex items-center gap-3">
+                          <span className="w-5 h-5 rounded-lg bg-yellow-400 shadow-sm" />
+                          <span className="text-slate-300 text-sm">Same era (within 2 years of career start)</span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="w-5 h-5 rounded-lg bg-orange-400 shadow-sm" />
+                          <span className="text-slate-300 text-sm">Shared team (played for the same team at some point)</span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="w-5 h-5 rounded-lg bg-green-500 shadow-sm" />
+                          <span className="text-slate-300 text-sm">Correct quarterback! 🎉</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-4 p-4 rounded-2xl bg-slate-800/50 border border-slate-700">
+                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-r from-purple-500 to-pink-500 flex items-center justify-center text-white font-bold text-sm">
+                      4
+                    </div>
+                    <div className="flex-1">
+                      <h3 className="text-white font-semibold mb-1">Game Modes</h3>
+                      <p className="text-slate-300 text-sm">
+                        <span className="font-bold text-white">📅 Daily Mode:</span> Everyone gets the same QB each day.
+                        <br />
+                        <span className="font-bold text-white">🔄 Unlimited Mode:</span> Play as many random games as you want!
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Close Button */}
+                <Button
+                  onClick={() => setShowHelp(false)}
+                  className="w-full h-12 rounded-2xl text-lg font-semibold bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 shadow-lg hover:shadow-xl transition-all hover:scale-105"
+                >
+                  Got it!
+                </Button>
+              </div>
+            </Card>
+          </div>
+        )}
+
         {/* Title Section */}
         <div className="text-center mb-8">
           <h1 className="text-5xl sm:text-6xl font-black mb-3 bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-400 bg-clip-text text-transparent leading-tight px-2">
@@ -420,34 +527,7 @@ ${window.location.origin}`
         {/* Guesses List */}
         {guesses.length > 0 && (
           <Card className="p-6 mb-8 rounded-3xl shadow-xl border-2 border-slate-700 bg-slate-800/80 backdrop-blur-sm">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-2xl font-bold text-white">Your Guesses</h2>
-              <Button 
-                variant="ghost" 
-                size="icon" 
-                onClick={() => setShowHelp(p => !p)}
-                className="rounded-full hover:bg-slate-700"
-              >
-                <span className="text-xl font-bold">?</span>
-              </Button>
-            </div>
-
-            {showHelp && (
-              <div className="mb-6 text-sm rounded-2xl border-2 border-slate-700 p-5 bg-slate-900/50 space-y-3">
-                <div className="flex items-center gap-3">
-                  <span className="w-5 h-5 rounded-lg bg-yellow-400 shadow-sm" />
-                  <span className="text-slate-300 font-medium">Close era (within 5 years)</span>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="w-5 h-5 rounded-lg bg-orange-400 shadow-sm" />
-                  <span className="text-slate-300 font-medium">Shared team</span>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="w-5 h-5 rounded-lg bg-green-500 shadow-sm" />
-                  <span className="text-slate-300 font-medium">Correct quarterback!</span>
-                </div>
-              </div>
-            )}
+            <h2 className="text-2xl font-bold text-white mb-4">Your Guesses</h2>
 
             <div className="space-y-3">
               {guesses.map((g, i) => {
