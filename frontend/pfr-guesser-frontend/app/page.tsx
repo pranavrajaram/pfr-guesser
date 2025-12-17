@@ -4,7 +4,7 @@ import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card } from "@/components/ui/card"
-import { Loader2, Check, Copy, AlertCircle } from "lucide-react"
+import { Loader2, Check, Copy, AlertCircle, ExternalLink } from "lucide-react"
 
 interface SeasonStats {
   season: number
@@ -25,14 +25,18 @@ interface GuessResult {
   correct: boolean
   era?: "same" | "far"
   teams_overlap?: boolean
+  pfr_id?: string
 }
 
+type GameMode = "daily" | "unlimited"
+
 // Use environment variable for API URL
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+const API_URL = 'http://localhost:8000' || process.env.NEXT_PUBLIC_API_URL
 
 export default function QBGuessingGame() {
   const MAX_GUESSES = 8
 
+  const [gameMode, setGameMode] = useState<GameMode>("daily")
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [seasons, setSeasons] = useState<SeasonStats[]>([])
   const [guess, setGuess] = useState("")
@@ -42,6 +46,7 @@ export default function QBGuessingGame() {
   const [gameWon, setGameWon] = useState(false)
   const [gameLost, setGameLost] = useState(false)
   const [answer, setAnswer] = useState<string | null>(null)
+  const [answerPfrId, setAnswerPfrId] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
 
   const [showSeasons, setShowSeasons] = useState(false)
@@ -55,7 +60,7 @@ export default function QBGuessingGame() {
   const hintsUsed = [showSeasons, showTeams, showAwards].filter(Boolean).length
 
   useEffect(() => {
-    loadQB()
+    loadQB("daily")
     const root = document.documentElement
     root.style.colorScheme = 'dark'
     root.classList.add('dark')
@@ -84,11 +89,12 @@ export default function QBGuessingGame() {
     return () => clearTimeout(timeout)
   }, [guess])
 
-  const loadQB = async () => {
+  const loadQB = async (mode: GameMode) => {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(`${API_URL}/random_qb`, {
+      const endpoint = mode === "daily" ? "/daily_qb" : "/random_qb"
+      const res = await fetch(`${API_URL}${endpoint}`, {
         cache: "no-store"
       })
       
@@ -99,12 +105,14 @@ export default function QBGuessingGame() {
       const data = await res.json()
       setSessionId(data.session_id)
       setSeasons(data.seasons)
+      setGameMode(mode)
       
       // Reset game state
       setGuesses([])
       setGameWon(false)
       setGameLost(false)
       setAnswer(null)
+      setAnswerPfrId(null)
       setGuess("")
       setShowSeasons(false)
       setShowTeams(false)
@@ -132,6 +140,7 @@ export default function QBGuessingGame() {
       
       const data = await res.json()
       setAnswer(data.name)
+      setAnswerPfrId(data.pfr_id)
       setGameLost(true)
     } catch (err) {
       console.error("Failed to reveal answer", err)
@@ -166,7 +175,8 @@ export default function QBGuessingGame() {
           name: guess,
           correct: data.correct,
           era: data.feedback?.era,
-          teams_overlap: data.feedback?.teams_overlap
+          teams_overlap: data.feedback?.teams_overlap,
+          pfr_id: data.pfr_id
         }
       ]
 
@@ -194,7 +204,9 @@ export default function QBGuessingGame() {
   }
 
   const handleShare = async () => {
-    const shareText = `QB Wordle 🏈
+    const modeEmoji = gameMode === "daily" ? "📅" : "🔄"
+    const shareText = `${modeEmoji} Drake Maye-dle 🏈
+Mode: ${gameMode === "daily" ? "Daily" : "Unlimited"}
 Result: ${gameWon ? "Win" : "Loss"}
 Guesses: ${guesses.length}/${MAX_GUESSES}
 Hints used: ${hintsUsed}
@@ -207,6 +219,16 @@ ${window.location.origin}`
     } catch {
       setError("Failed to copy to clipboard")
     }
+  }
+
+  const switchMode = (mode: GameMode) => {
+    if (mode !== gameMode) {
+      loadQB(mode)
+    }
+  }
+
+  const getPfrUrl = (pfrId: string) => {
+    return `https://www.pro-football-reference.com/players/${pfrId.charAt(0)}/${pfrId}.htm`
   }
 
   if (loading) {
@@ -227,7 +249,7 @@ ${window.location.origin}`
           </div>
           <p className="text-slate-300 mb-4">{error}</p>
           <Button 
-            onClick={loadQB}
+            onClick={() => loadQB(gameMode)}
             className="w-full bg-blue-500 hover:bg-blue-600"
           >
             Try Again
@@ -245,9 +267,34 @@ ${window.location.origin}`
           <h1 className="text-5xl sm:text-6xl font-black mb-3 bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-400 bg-clip-text text-transparent leading-tight px-2">
             Drake Maye-dle
           </h1>
-          <p className="text-slate-400 text-lg mb-2">
+          <p className="text-slate-400 text-lg mb-4">
             Guess the quarterback from their Pro Football Reference page!
           </p>
+          
+          {/* Game Mode Selector */}
+          <div className="flex justify-center gap-2 mb-4">
+            <Button
+              onClick={() => switchMode("daily")}
+              className={`rounded-full px-6 py-2 font-semibold transition-all ${
+                gameMode === "daily"
+                  ? "bg-gradient-to-r from-blue-500 to-indigo-500 text-white shadow-lg"
+                  : "bg-slate-800/80 text-slate-300 hover:bg-slate-700"
+              }`}
+            >
+              📅 Daily
+            </Button>
+            <Button
+              onClick={() => switchMode("unlimited")}
+              className={`rounded-full px-6 py-2 font-semibold transition-all ${
+                gameMode === "unlimited"
+                  ? "bg-gradient-to-r from-blue-500 to-indigo-500 text-white shadow-lg"
+                  : "bg-slate-800/80 text-slate-300 hover:bg-slate-700"
+              }`}
+            >
+              🔄 Unlimited
+            </Button>
+          </div>
+
           <div className="inline-flex items-center gap-2 px-4 py-2 bg-slate-800/60 backdrop-blur-sm rounded-full border border-slate-700">
             <span className="text-2xl font-bold text-white">{guesses.length}</span>
             <span className="text-slate-400">/</span>
@@ -415,7 +462,20 @@ ${window.location.origin}`
                     className={`flex items-center justify-between px-6 py-4 rounded-2xl font-semibold text-lg transition-all ${bgClass}`}
                   >
                     <span>{g.name}</span>
-                    {g.correct && <span className="text-2xl">✓</span>}
+                    <div className="flex items-center gap-3">
+                      {g.pfr_id && (
+                        <a
+                          href={getPfrUrl(g.pfr_id)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="hover:opacity-70 transition-opacity"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <ExternalLink className="w-5 h-5" />
+                        </a>
+                      )}
+                      {g.correct && <span className="text-2xl">✓</span>}
+                    </div>
                   </div>
                 )
               })}
@@ -430,9 +490,23 @@ ${window.location.origin}`
               {gameWon ? "🎉 Correct!" : "Game Over"}
             </h2>
             {gameLost && answer && (
-              <p className="mb-6 text-lg text-slate-300">
-                The correct quarterback was <span className="font-bold text-blue-400">{answer}</span>
-              </p>
+              <div className="mb-6">
+                <p className="text-lg text-slate-300 mb-2">
+                  The correct quarterback was{" "}
+                  <span className="font-bold text-blue-400">{answer}</span>
+                </p>
+                {answerPfrId && (
+                  <a
+                    href={getPfrUrl(answerPfrId)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 text-blue-400 hover:text-blue-300 transition-colors"
+                  >
+                    View on Pro Football Reference
+                    <ExternalLink className="w-4 h-4" />
+                  </a>
+                )}
+              </div>
             )}
             <div className="flex gap-3">
               <Button 
@@ -443,7 +517,7 @@ ${window.location.origin}`
                 {copied ? "Copied!" : "Share"}
               </Button>
               <Button 
-                onClick={loadQB} 
+                onClick={() => loadQB(gameMode)} 
                 className="flex-1 h-14 rounded-2xl text-lg font-semibold bg-gradient-to-r from-emerald-500 to-green-500 hover:from-emerald-600 hover:to-green-600 shadow-lg hover:shadow-xl transition-all hover:scale-105"
               >
                 New Game

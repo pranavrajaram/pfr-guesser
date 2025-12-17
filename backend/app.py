@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uuid
 from datetime import datetime, timedelta
 import os
+import hashlib
 
 # ----------------------
 # App setup
@@ -14,7 +15,7 @@ import os
 app = FastAPI()
 
 # Use environment variable for allowed origins
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,17 +31,30 @@ DB_PATH = os.getenv("DB_PATH", "football_wordle.db")
 # ----------------------
 
 def init_sessions_table():
-    """Create sessions table if it doesn't exist"""
+    """Create sessions table if it doesn't exist and migrate if needed"""
     with sqlite3.connect(DB_PATH) as conn:
+        # Create table if it doesn't exist
         conn.execute("""
             CREATE TABLE IF NOT EXISTS game_sessions (
                 session_id TEXT PRIMARY KEY,
                 player_id INTEGER NOT NULL,
+                game_mode TEXT NOT NULL DEFAULT 'unlimited',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (player_id) REFERENCES players(id)
             )
         """)
+        
+        # Check if game_mode column exists and add it if it doesn't
+        cursor = conn.execute("PRAGMA table_info(game_sessions)")
+        columns = [row[1] for row in cursor.fetchall()]
+        
+        if 'game_mode' not in columns:
+            conn.execute("""
+                ALTER TABLE game_sessions 
+                ADD COLUMN game_mode TEXT NOT NULL DEFAULT 'unlimited'
+            """)
+        
         conn.commit()
 
 # Initialize on startup
@@ -63,10 +77,40 @@ def clean_nan(obj):
     return obj
 
 
+def get_daily_player_id(conn):
+    """Get a deterministic player ID based on today's date"""
+    today = datetime.now().date().isoformat()
+    
+    # Create a hash from the date to get a consistent random seed
+    seed = int(hashlib.md5(today.encode()).hexdigest(), 16) % (2**31)
+    
+    # Get all valid player IDs
+    player_df = pd.read_sql(
+        """
+        SELECT p.id
+        FROM players p
+        JOIN passing_seasons ps
+          ON p.id = ps.player_id
+        GROUP BY p.id
+        HAVING COUNT(ps.id) > 0
+        """,
+        conn,
+    )
+    
+    if player_df.empty:
+        return None
+    
+    # Use numpy with the seed to select a consistent player for today
+    np.random.seed(seed)
+    idx = np.random.randint(0, len(player_df))
+    
+    return int(player_df.iloc[idx]["id"])
+
+
 def get_player_by_name(conn, name):
     df = pd.read_sql(
         """
-        SELECT id, name
+        SELECT id, name, pfr_id
         FROM players
         WHERE LOWER(name) = LOWER(?)
         LIMIT 1
@@ -78,7 +122,11 @@ def get_player_by_name(conn, name):
     if df.empty:
         return None
 
-    return int(df.iloc[0]["id"])
+    return {
+        "id": int(df.iloc[0]["id"]),
+        "name": df.iloc[0]["name"],
+        "pfr_id": df.iloc[0]["pfr_id"]
+    }
 
 
 def get_player_era(conn, player_id):
@@ -109,15 +157,15 @@ def get_player_teams(conn, player_id):
     return set(df["team"].dropna().tolist())
 
 
-def create_session(conn, player_id):
+def create_session(conn, player_id, game_mode="unlimited"):
     """Create a new game session"""
     session_id = str(uuid.uuid4())
     conn.execute(
         """
-        INSERT INTO game_sessions (session_id, player_id, created_at, last_accessed)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO game_sessions (session_id, player_id, game_mode, created_at, last_accessed)
+        VALUES (?, ?, ?, ?, ?)
         """,
-        (session_id, player_id, datetime.now(), datetime.now())
+        (session_id, player_id, game_mode, datetime.now(), datetime.now())
     )
     conn.commit()
     return session_id
@@ -180,11 +228,49 @@ def health_check():
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
 
+@app.get("/daily_qb")
+def daily_qb():
+    """Start a daily game session with today's QB"""
+    
+    cleanup_old_sessions()
+    
+    with sqlite3.connect(DB_PATH) as conn:
+        player_id = get_daily_player_id(conn)
+        
+        if player_id is None:
+            raise HTTPException(status_code=500, detail="No playable QBs found")
+        
+        # Create session
+        session_id = create_session(conn, player_id, game_mode="daily")
+
+        seasons = pd.read_sql(
+            """
+            SELECT season, team, games, games_started,
+                   completions, attempts, yards,
+                   touchdowns, interceptions,
+                   passer_rating, qbr, av, awards
+            FROM passing_seasons
+            WHERE player_id = ?
+            ORDER BY season
+            """,
+            conn,
+            params=(player_id,),
+        )
+
+        seasons = seasons.where(pd.notnull(seasons), None)
+        seasons_dict = seasons.to_dict(orient="records")
+
+    return {
+        "session_id": session_id,
+        "game_mode": "daily",
+        "seasons": clean_nan(seasons_dict)
+    }
+
+
 @app.get("/random_qb")
 def random_qb():
     """Start a new game session with a random QB"""
     
-    # Clean up old sessions periodically
     cleanup_old_sessions()
     
     with sqlite3.connect(DB_PATH) as conn:
@@ -208,7 +294,7 @@ def random_qb():
         player_id = int(player_df.iloc[0]["id"])
         
         # Create session
-        session_id = create_session(conn, player_id)
+        session_id = create_session(conn, player_id, game_mode="unlimited")
 
         seasons = pd.read_sql(
             """
@@ -229,6 +315,7 @@ def random_qb():
 
     return {
         "session_id": session_id,
+        "game_mode": "unlimited",
         "seasons": clean_nan(seasons_dict)
     }
 
@@ -256,12 +343,18 @@ def guess_qb(payload: dict = Body(...)):
                 detail="Session not found or expired. Please start a new game."
             )
 
-        guessed_id = get_player_by_name(conn, guess_name)
-        if guessed_id is None:
+        guessed_player = get_player_by_name(conn, guess_name)
+        if guessed_player is None:
             raise HTTPException(status_code=404, detail="Player not found")
 
+        guessed_id = guessed_player["id"]
+        pfr_id = guessed_player["pfr_id"]
+
         if guessed_id == current_qb_id:
-            return {"correct": True}
+            return {
+                "correct": True,
+                "pfr_id": pfr_id
+            }
 
         guess_start, guess_end = get_player_era(conn, guessed_id)
         answer_start, answer_end = get_player_era(conn, current_qb_id)
@@ -279,6 +372,7 @@ def guess_qb(payload: dict = Body(...)):
 
     return {
         "correct": False,
+        "pfr_id": pfr_id,
         "feedback": {
             "era": era_feedback,
             "teams_overlap": teams_overlap
@@ -305,12 +399,15 @@ def reveal(payload: dict = Body(...)):
             )
         
         df = pd.read_sql(
-            "SELECT name FROM players WHERE id = ?",
+            "SELECT name, pfr_id FROM players WHERE id = ?",
             conn,
             params=(current_qb_id,),
         )
 
-    return {"name": df.iloc[0]["name"]}
+    return {
+        "name": df.iloc[0]["name"],
+        "pfr_id": df.iloc[0]["pfr_id"]
+    }
 
 
 @app.get("/autocomplete")
