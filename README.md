@@ -1,3 +1,3 @@
 # pfr-guesser
 
-Version 1 up at: https://drake-mayedle.vercel.app/
+Check it out at: https://drakemayedle.pranavrajaram.com/
