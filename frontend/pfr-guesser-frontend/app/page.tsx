@@ -1,10 +1,7 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Card } from "@/components/ui/card"
-import { Loader2, Check, Copy, AlertCircle, ExternalLink } from "lucide-react"
+import { useState, useEffect, useRef } from "react"
+import { Loader2, Check, Copy, ExternalLink, HelpCircle, Trophy, Target, Zap, X, RefreshCw } from "lucide-react"
 
 interface SeasonStats {
   season: number
@@ -35,6 +32,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 export default function QBGuessingGame() {
   const MAX_GUESSES = 8
+  const inputRef = useRef<HTMLInputElement>(null)
 
   const [gameMode, setGameMode] = useState<GameMode>("daily")
   const [sessionId, setSessionId] = useState<string | null>(null)
@@ -56,19 +54,18 @@ export default function QBGuessingGame() {
 
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [showSuggestions, setShowSuggestions] = useState(false)
+  const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(-1)
 
   const hintsUsed = [showSeasons, showTeams, showAwards].filter(Boolean).length
 
   useEffect(() => {
     loadQB("daily")
-    const root = document.documentElement
-    root.style.colorScheme = 'dark'
-    root.classList.add('dark')
   }, [])
 
   useEffect(() => {
     if (!guess.trim()) {
       setSuggestions([])
+      setSelectedSuggestionIndex(-1)
       return
     }
 
@@ -81,10 +78,11 @@ export default function QBGuessingGame() {
         const data = await res.json()
         setSuggestions(data.players || [])
         setShowSuggestions(true)
+        setSelectedSuggestionIndex(-1)
       } catch {
         setSuggestions([])
       }
-    }, 250)
+    }, 200)
 
     return () => clearTimeout(timeout)
   }, [guess])
@@ -107,7 +105,6 @@ export default function QBGuessingGame() {
       setSeasons(data.seasons)
       setGameMode(mode)
       
-      // Reset game state
       setGuesses([])
       setGameWon(false)
       setGameLost(false)
@@ -136,7 +133,20 @@ export default function QBGuessingGame() {
         body: JSON.stringify({ session_id: sessionId })
       })
       
-      if (!res.ok) throw new Error('Failed to reveal answer')
+      if (!res.ok) {
+        const errorData = await res.json()
+        const errorMessage = errorData.detail || 'Failed to reveal answer'
+        
+        if (res.status === 404 && errorMessage.includes("Session not found")) {
+          console.log("Session expired, reloading game...")
+          await loadQB(gameMode)
+          setError("Your session expired. A new game has been loaded!")
+          setTimeout(() => setError(null), 3000)
+          return
+        }
+        
+        throw new Error(errorMessage)
+      }
       
       const data = await res.json()
       setAnswer(data.name)
@@ -144,7 +154,7 @@ export default function QBGuessingGame() {
       setGameLost(true)
     } catch (err) {
       console.error("Failed to reveal answer", err)
-      setError("Failed to reveal answer")
+      setError(err instanceof Error ? err.message : "Failed to reveal answer")
     }
   }
 
@@ -164,7 +174,17 @@ export default function QBGuessingGame() {
 
       if (!res.ok) {
         const errorData = await res.json()
-        throw new Error(errorData.detail || 'Guess failed')
+        const errorMessage = errorData.detail || 'Guess failed'
+        
+        if (res.status === 404 && errorMessage.includes("Session not found")) {
+          console.log("Session expired, reloading game...")
+          await loadQB(gameMode)
+          setError("Your session expired. A new game has been loaded!")
+          setTimeout(() => setError(null), 3000)
+          return
+        }
+        
+        throw new Error(errorMessage)
       }
 
       const data = await res.json()
@@ -197,19 +217,47 @@ export default function QBGuessingGame() {
     }
   }
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (showSuggestions && suggestions.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setSelectedSuggestionIndex(prev => 
+          prev < suggestions.length - 1 ? prev + 1 : 0
+        )
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSelectedSuggestionIndex(prev => 
+          prev > 0 ? prev - 1 : suggestions.length - 1
+        )
+      } else if (e.key === 'Enter' && selectedSuggestionIndex >= 0) {
+        e.preventDefault()
+        setGuess(suggestions[selectedSuggestionIndex])
+        setSuggestions([])
+        setShowSuggestions(false)
+        setSelectedSuggestionIndex(-1)
+      } else if (e.key === 'Enter') {
+        submitGuess()
+      } else if (e.key === 'Escape') {
+        setShowSuggestions(false)
+      }
+    } else if (e.key === 'Enter') {
       submitGuess()
     }
   }
 
   const handleShare = async () => {
     const modeEmoji = gameMode === "daily" ? "📅" : "🔄"
-    const shareText = `${modeEmoji} Drake Maye-dle 🏈
-Mode: ${gameMode === "daily" ? "Daily" : "Unlimited"}
-Result: ${gameWon ? "Win" : "Loss"}
-Guesses: ${guesses.length}/${MAX_GUESSES}
-Hints used: ${hintsUsed}
+    const resultEmoji = gameWon ? "🏆" : "💀"
+    const guessEmojis = guesses.map(g => {
+      if (g.correct) return "🟢"
+      if (g.teams_overlap) return "🟠"
+      if (g.era === "same") return "🟡"
+      return "⚫"
+    }).join("")
+
+    const shareText = `${modeEmoji} Drake Maye-dle ${resultEmoji}
+${guessEmojis}
+${guesses.length}/${MAX_GUESSES} guesses | ${hintsUsed} hints
 ${window.location.origin}`
 
     try {
@@ -231,281 +279,338 @@ ${window.location.origin}`
     return `https://www.pro-football-reference.com/players/${pfrId.charAt(0)}/${pfrId}.htm`
   }
 
+  // Loading state
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
-        <Loader2 className="w-10 h-10 animate-spin text-blue-400" />
+      <div className="min-h-screen flex items-center justify-center pattern-grid">
+        <div className="text-center animate-fade-in-up">
+          <div className="relative">
+            <div className="w-20 h-20 rounded-full border-4 border-[#00d4aa]/20 border-t-[#00d4aa] animate-spin mx-auto" />
+            <div className="absolute inset-0 flex items-center justify-center">
+              <span className="text-3xl">🏈</span>
+            </div>
+          </div>
+          <p className="mt-6 text-[#6b7280] font-medium">Loading game...</p>
+        </div>
       </div>
     )
   }
 
-  if (error) {
+  // Error state
+  if (error && !seasons.length) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
-        <Card className="p-8 max-w-md bg-slate-800/90 border-2 border-red-500/50">
-          <div className="flex items-center gap-3 mb-4">
-            <AlertCircle className="w-6 h-6 text-red-400" />
-            <h2 className="text-xl font-bold text-white">Error</h2>
+      <div className="min-h-screen flex items-center justify-center pattern-grid p-4">
+        <div className="glass rounded-3xl p-8 max-w-md w-full border border-[#2a3046] animate-fade-in-up text-center">
+          <div className="w-16 h-16 rounded-full bg-[#ef4444]/10 flex items-center justify-center mx-auto mb-4">
+            <X className="w-8 h-8 text-[#ef4444]" />
           </div>
-          <p className="text-slate-300 mb-4">{error}</p>
-          <Button 
+          <h2 className="text-2xl font-bold text-white mb-2">Oops!</h2>
+          <p className="text-[#6b7280] mb-6">{error}</p>
+          <button 
             onClick={() => loadQB(gameMode)}
-            className="w-full bg-blue-500 hover:bg-blue-600"
+            className="w-full py-4 px-6 rounded-2xl font-semibold bg-gradient-to-r from-[#00d4aa] to-[#00b894] text-[#0c0f1a] hover:opacity-90 transition-all active:scale-[0.98]"
           >
             Try Again
-          </Button>
-        </Card>
+          </button>
+        </div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
-      <div className="container mx-auto px-4 py-8 max-w-6xl relative">
-        {/* Help Button - Top Right */}
-        <Button 
-          variant="ghost" 
-          size="icon" 
-          onClick={() => setShowHelp(p => !p)}
-          className="fixed top-4 right-4 z-40 w-12 h-12 rounded-full bg-slate-800/90 hover:bg-slate-700 border-2 border-slate-600 shadow-lg hover:shadow-xl transition-all hover:scale-110"
-        >
-          <span className="text-2xl font-bold text-slate-200">?</span>
-        </Button>
+    <div className="min-h-screen pattern-grid">
+      {/* Floating orbs for depth */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute -top-40 -right-40 w-80 h-80 bg-[#00d4aa]/10 rounded-full blur-3xl animate-float" />
+        <div className="absolute -bottom-40 -left-40 w-96 h-96 bg-[#7c3aed]/10 rounded-full blur-3xl animate-float delay-300" />
+      </div>
+
+      <div className="relative container mx-auto px-4 py-6 max-w-5xl">
+        {/* Header */}
+        <header className="flex items-center justify-between mb-8 animate-fade-in-up">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#00d4aa] to-[#00b894] flex items-center justify-center text-2xl shadow-lg glow-sm">
+              🏈
+            </div>
+            <div>
+              <h1 className="text-2xl sm:text-3xl font-bold gradient-text">Drake Maye-dle</h1>
+              <p className="text-sm text-[#6b7280] hidden sm:block">Guess the QB from their stats</p>
+            </div>
+          </div>
+          
+          <button 
+            onClick={() => setShowHelp(true)}
+            className="w-11 h-11 rounded-xl bg-[#1e2438] border border-[#2a3046] flex items-center justify-center hover:bg-[#2a3046] hover:border-[#00d4aa]/50 transition-all group"
+            aria-label="Help"
+          >
+            <HelpCircle className="w-5 h-5 text-[#6b7280] group-hover:text-[#00d4aa] transition-colors" />
+          </button>
+        </header>
+
+        {/* Error toast */}
+        {error && seasons.length > 0 && (
+          <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 glass rounded-2xl px-6 py-3 border border-[#f59e0b]/50 animate-fade-in">
+            <p className="text-[#f59e0b] font-medium text-sm">{error}</p>
+          </div>
+        )}
 
         {/* Help Modal */}
         {showHelp && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in" onClick={() => setShowHelp(false)}>
-            <Card className="relative max-w-2xl w-full bg-gradient-to-br from-slate-800 via-slate-900 to-slate-800 border-2 border-slate-700 shadow-2xl rounded-3xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
-              {/* Decorative gradient overlay */}
-              <div className="absolute inset-0 bg-gradient-to-br from-blue-500/10 via-indigo-500/10 to-purple-500/10 pointer-events-none" />
+          <div 
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in"
+            onClick={() => setShowHelp(false)}
+          >
+            <div 
+              className="relative w-full max-w-lg glass rounded-3xl border border-[#2a3046] overflow-hidden animate-fade-in-up"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header gradient */}
+              <div className="absolute top-0 left-0 right-0 h-32 bg-gradient-to-b from-[#00d4aa]/10 to-transparent pointer-events-none" />
               
-              <div className="relative p-8 sm:p-10">
-                {/* Header */}
+              <div className="relative p-6 sm:p-8">
+                <button 
+                  onClick={() => setShowHelp(false)}
+                  className="absolute top-4 right-4 w-8 h-8 rounded-full bg-[#2a3046] flex items-center justify-center hover:bg-[#3a4056] transition-colors"
+                >
+                  <X className="w-4 h-4 text-[#6b7280]" />
+                </button>
+
                 <div className="text-center mb-6">
-                  <h2 className="text-4xl sm:text-5xl font-black mb-3 bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-400 bg-clip-text text-transparent">
-                    How to Play
-                  </h2>
-                  <p className="text-slate-300 text-lg">
-                    Guess the quarterback from their career stats
-                  </p>
+                  <h2 className="text-3xl font-bold gradient-text mb-2">How to Play</h2>
+                  <p className="text-[#6b7280]">Guess the mystery quarterback</p>
                 </div>
 
-                {/* Instructions */}
-                <div className="space-y-4 mb-8 max-h-96 overflow-y-auto pr-2">
-                  <div className="flex gap-4 p-4 rounded-2xl bg-slate-800/50 border border-slate-700">
-                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-r from-blue-500 to-indigo-500 flex items-center justify-center text-white font-bold text-sm">
-                      1
+                <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
+                  <div className="flex gap-4 p-4 rounded-2xl bg-[#161b2e] border border-[#2a3046]">
+                    <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-gradient-to-br from-[#00d4aa] to-[#00b894] flex items-center justify-center">
+                      <Target className="w-5 h-5 text-[#0c0f1a]" />
                     </div>
-                    <div className="flex-1">
-                      <h3 className="text-white font-semibold mb-1">Make Your Guess</h3>
-                      <p className="text-slate-300 text-sm">
-                        Type a quarterback's name in the input field. You have <span className="font-bold text-white">{MAX_GUESSES} guesses</span> to find the correct player. The current player pool is all quarterbacks with at least 2,000 passing yards since 2010.
+                    <div>
+                      <h3 className="font-semibold text-white mb-1">Make Guesses</h3>
+                      <p className="text-sm text-[#6b7280]">
+                        You have <span className="text-[#00d4aa] font-semibold">{MAX_GUESSES} attempts</span> to identify the QB from their career stats. The player pool includes all QBs with 2,000+ passing yards since 2010.
                       </p>
                     </div>
                   </div>
 
-                  <div className="flex gap-4 p-4 rounded-2xl bg-slate-800/50 border border-slate-700">
-                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-r from-yellow-500 to-orange-500 flex items-center justify-center text-white font-bold text-sm">
-                      2
+                  <div className="flex gap-4 p-4 rounded-2xl bg-[#161b2e] border border-[#2a3046]">
+                    <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-gradient-to-br from-[#f59e0b] to-[#d97706] flex items-center justify-center">
+                      <Zap className="w-5 h-5 text-[#0c0f1a]" />
                     </div>
-                    <div className="flex-1">
-                      <h3 className="text-white font-semibold mb-1">Use Hints</h3>
-                      <p className="text-slate-300 text-sm">
-                        Click the hint buttons to reveal <span className="font-bold text-white">Seasons</span>, <span className="font-bold text-white">Teams</span>, or <span className="font-bold text-white">Awards</span>.
+                    <div>
+                      <h3 className="font-semibold text-white mb-1">Use Hints</h3>
+                      <p className="text-sm text-[#6b7280]">
+                        Toggle <span className="text-white">Seasons</span>, <span className="text-white">Teams</span>, or <span className="text-white">Awards</span> for extra clues.
                       </p>
                     </div>
                   </div>
 
-                  <div className="flex gap-4 p-4 rounded-2xl bg-slate-800/50 border border-slate-700">
-                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-r from-green-500 to-emerald-500 flex items-center justify-center text-white font-bold text-sm">
-                      3
-                    </div>
-                    <div className="flex-1">
-                      <h3 className="text-white font-semibold mb-1">Get Feedback</h3>
-                      <p className="text-slate-300 text-sm mb-2">
-                        After each guess, you'll see color-coded feedback:
-                      </p>
-                      <div className="space-y-2 mt-2">
-                        <div className="flex items-center gap-3">
-                          <span className="w-5 h-5 rounded-lg bg-yellow-400 shadow-sm" />
-                          <span className="text-slate-300 text-sm">Same era (within 2 years of career start)</span>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <span className="w-5 h-5 rounded-lg bg-orange-400 shadow-sm" />
-                          <span className="text-slate-300 text-sm">Shared team (played for the same team at some point)</span>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <span className="w-5 h-5 rounded-lg bg-green-500 shadow-sm" />
-                          <span className="text-slate-300 text-sm">Correct quarterback! 🎉</span>
-                        </div>
+                  <div className="p-4 rounded-2xl bg-[#161b2e] border border-[#2a3046]">
+                    <h3 className="font-semibold text-white mb-3">Feedback Colors</h3>
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-3">
+                        <span className="w-4 h-4 rounded-md bg-[#22c55e]" />
+                        <span className="text-sm text-[#6b7280]">Correct answer!</span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="w-4 h-4 rounded-md bg-[#f59e0b]" />
+                        <span className="text-sm text-[#6b7280]">Played for the same team</span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="w-4 h-4 rounded-md bg-[#eab308]" />
+                        <span className="text-sm text-[#6b7280]">Same era (within 2 years)</span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="w-4 h-4 rounded-md bg-[#374151]" />
+                        <span className="text-sm text-[#6b7280]">No match</span>
                       </div>
                     </div>
                   </div>
 
-                  <div className="flex gap-4 p-4 rounded-2xl bg-slate-800/50 border border-slate-700">
-                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-r from-purple-500 to-pink-500 flex items-center justify-center text-white font-bold text-sm">
-                      4
+                  <div className="flex gap-4 p-4 rounded-2xl bg-[#161b2e] border border-[#2a3046]">
+                    <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-gradient-to-br from-[#7c3aed] to-[#6d28d9] flex items-center justify-center">
+                      <Trophy className="w-5 h-5 text-white" />
                     </div>
-                    <div className="flex-1">
-                      <h3 className="text-white font-semibold mb-1">Game Modes</h3>
-                      <p className="text-slate-300 text-sm">
-                        <span className="font-bold text-white">📅 Daily Mode:</span> Everyone gets the same QB each day.
+                    <div>
+                      <h3 className="font-semibold text-white mb-1">Game Modes</h3>
+                      <p className="text-sm text-[#6b7280]">
+                        <span className="text-white">📅 Daily:</span> Same QB for everyone.
                         <br />
-                        <span className="font-bold text-white">🔄 Unlimited Mode:</span> Play as many random games as you want!
+                        <span className="text-white">🔄 Unlimited:</span> Random QBs, play forever!
                       </p>
                     </div>
                   </div>
                 </div>
 
-                {/* Close Button */}
-                <Button
+                <button
                   onClick={() => setShowHelp(false)}
-                  className="w-full h-12 rounded-2xl text-lg font-semibold bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 shadow-lg hover:shadow-xl transition-all hover:scale-105"
+                  className="w-full mt-6 py-4 px-6 rounded-2xl font-semibold bg-gradient-to-r from-[#00d4aa] to-[#00b894] text-[#0c0f1a] hover:opacity-90 transition-all active:scale-[0.98]"
                 >
-                  Got it!
-                </Button>
+                  Let&apos;s Play!
+                </button>
               </div>
-            </Card>
+            </div>
           </div>
         )}
 
-        {/* Title Section */}
-        <div className="text-center mb-8">
-          <h1 className="text-5xl sm:text-6xl font-black mb-3 bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-400 bg-clip-text text-transparent leading-tight px-2">
-            Drake Maye-dle
-          </h1>
-          <p className="text-slate-400 text-lg mb-4">
-            Guess the quarterback from their Pro Football Reference page!
-          </p>
-          
-          {/* Game Mode Selector */}
-          <div className="flex justify-center gap-2 mb-4">
-            <Button
+        {/* Game Mode Toggle */}
+        <div className="flex justify-center mb-6 animate-fade-in-up delay-100">
+          <div className="inline-flex p-1 rounded-2xl bg-[#161b2e] border border-[#2a3046]">
+            <button
               onClick={() => switchMode("daily")}
-              className={`rounded-full px-6 py-2 font-semibold transition-all ${
+              className={`px-6 py-3 rounded-xl font-medium transition-all ${
                 gameMode === "daily"
-                  ? "bg-gradient-to-r from-blue-500 to-indigo-500 text-white shadow-lg"
-                  : "bg-slate-800/80 text-slate-300 hover:bg-slate-700"
+                  ? "bg-gradient-to-r from-[#00d4aa] to-[#00b894] text-[#0c0f1a] shadow-lg"
+                  : "text-[#6b7280] hover:text-white"
               }`}
             >
               📅 Daily
-            </Button>
-            <Button
+            </button>
+            <button
               onClick={() => switchMode("unlimited")}
-              className={`rounded-full px-6 py-2 font-semibold transition-all ${
+              className={`px-6 py-3 rounded-xl font-medium transition-all ${
                 gameMode === "unlimited"
-                  ? "bg-gradient-to-r from-blue-500 to-indigo-500 text-white shadow-lg"
-                  : "bg-slate-800/80 text-slate-300 hover:bg-slate-700"
+                  ? "bg-gradient-to-r from-[#00d4aa] to-[#00b894] text-[#0c0f1a] shadow-lg"
+                  : "text-[#6b7280] hover:text-white"
               }`}
             >
               🔄 Unlimited
-            </Button>
-          </div>
-
-          <div className="inline-flex items-center gap-2 px-4 py-2 bg-slate-800/60 backdrop-blur-sm rounded-full border border-slate-700">
-            <span className="text-2xl font-bold text-white">{guesses.length}</span>
-            <span className="text-slate-400">/</span>
-            <span className="text-slate-400">{MAX_GUESSES}</span>
-            <span className="text-sm text-slate-400 ml-1">guesses</span>
+            </button>
           </div>
         </div>
 
-        {/* Hint Buttons */}
-        <div className="flex flex-wrap justify-center gap-3 mb-8">
-          <Button
-            variant="outline"
-            disabled={showSeasons}
-            onClick={() => setShowSeasons(true)}
-            className="rounded-full px-6 py-5 font-semibold border-2 hover:scale-105 transition-all shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed bg-slate-800/80 backdrop-blur-sm"
-          >
-            {showSeasons ? "✓ Seasons" : "Show Seasons"}
-          </Button>
-          <Button
-            variant="outline"
-            disabled={showTeams}
-            onClick={() => setShowTeams(true)}
-            className="rounded-full px-6 py-5 font-semibold border-2 hover:scale-105 transition-all shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed bg-slate-800/80 backdrop-blur-sm"
-          >
-            {showTeams ? "✓ Teams" : "Show Teams"}
-          </Button>
-          <Button
-            variant="outline"
-            disabled={showAwards}
-            onClick={() => setShowAwards(true)}
-            className="rounded-full px-6 py-5 font-semibold border-2 hover:scale-105 transition-all shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed bg-slate-800/80 backdrop-blur-sm"
-          >
-            {showAwards ? "✓ Awards" : "Show Awards"}
-          </Button>
+        {/* Stats & Hints Section */}
+        <div className="grid gap-4 mb-6 animate-fade-in-up delay-200">
+          {/* Progress indicator */}
+          <div className="flex items-center justify-between glass rounded-2xl px-5 py-4 border border-[#2a3046]">
+            <div className="flex items-center gap-3">
+              <span className="text-[#6b7280] text-sm font-medium">Progress</span>
+              <div className="flex gap-1.5">
+                {Array.from({ length: MAX_GUESSES }).map((_, i) => {
+                  const g = guesses[i]
+                  let bgClass = "bg-[#2a3046]"
+                  if (g?.correct) bgClass = "bg-[#22c55e]"
+                  else if (g?.teams_overlap) bgClass = "bg-[#f59e0b]"
+                  else if (g?.era === "same") bgClass = "bg-[#eab308]"
+                  else if (g) bgClass = "bg-[#374151]"
+                  
+                  return (
+                    <div 
+                      key={i} 
+                      className={`w-3 h-3 rounded-full transition-all ${bgClass} ${g ? 'scale-100' : 'scale-75 opacity-50'}`} 
+                    />
+                  )
+                })}
+              </div>
+            </div>
+            <div className="text-right">
+              <span className="text-2xl font-bold text-white">{guesses.length}</span>
+              <span className="text-[#6b7280] text-sm">/{MAX_GUESSES}</span>
+            </div>
+          </div>
+
+          {/* Hint buttons */}
+          <div className="flex flex-wrap gap-2">
+            {[
+              { key: 'seasons', label: 'Seasons', active: showSeasons, toggle: () => setShowSeasons(true) },
+              { key: 'teams', label: 'Teams', active: showTeams, toggle: () => setShowTeams(true) },
+              { key: 'awards', label: 'Awards', active: showAwards, toggle: () => setShowAwards(true) },
+            ].map(hint => (
+              <button
+                key={hint.key}
+                onClick={hint.toggle}
+                disabled={hint.active}
+                className={`flex-1 min-w-[100px] py-3 px-4 rounded-xl font-medium transition-all border ${
+                  hint.active
+                    ? "bg-[#00d4aa]/10 border-[#00d4aa]/50 text-[#00d4aa]"
+                    : "bg-[#161b2e] border-[#2a3046] text-[#6b7280] hover:border-[#00d4aa]/30 hover:text-white"
+                }`}
+              >
+                {hint.active ? `✓ ${hint.label}` : `Show ${hint.label}`}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Stats Table */}
-        <Card className="mb-8 rounded-3xl shadow-2xl overflow-hidden border-2 border-slate-700 bg-slate-800/80 backdrop-blur-sm">
+        <div className="glass rounded-3xl border border-[#2a3046] overflow-hidden mb-6 animate-fade-in-up delay-300">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-gradient-to-r from-slate-800 to-slate-900 border-b-2 border-slate-700">
-                <tr>
-                  {showSeasons && <th className="px-4 py-4 text-left font-bold text-slate-300">Season</th>}
-                  {showTeams && <th className="px-4 py-4 text-left font-bold text-slate-300">Team</th>}
-                  <th className="px-4 py-4 text-right font-bold text-slate-300">G</th>
-                  <th className="px-4 py-4 text-right font-bold text-slate-300">GS</th>
-                  <th className="px-4 py-4 text-right font-bold text-slate-300">Cmp</th>
-                  <th className="px-4 py-4 text-right font-bold text-slate-300">Att</th>
-                  <th className="px-4 py-4 text-right font-bold text-slate-300">Yds</th>
-                  <th className="px-4 py-4 text-right font-bold text-slate-300">TD</th>
-                  <th className="px-4 py-4 text-right font-bold text-slate-300">Int</th>
-                  <th className="px-4 py-4 text-right font-bold text-slate-300">Rate</th>
-                  {showAwards && <th className="px-4 py-4 text-right font-bold text-slate-300">Awards</th>}
+              <thead>
+                <tr className="border-b border-[#2a3046] bg-[#161b2e]">
+                  {showSeasons && <th className="px-4 py-4 text-left font-semibold text-[#00d4aa]">Year</th>}
+                  {showTeams && <th className="px-4 py-4 text-left font-semibold text-[#00d4aa]">Team</th>}
+                  <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">G</th>
+                  <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">GS</th>
+                  <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">Cmp</th>
+                  <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">Att</th>
+                  <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">Yds</th>
+                  <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">TD</th>
+                  <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">Int</th>
+                  <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">Rate</th>
+                  {showAwards && <th className="px-4 py-4 text-left font-semibold text-[#00d4aa]">Awards</th>}
                 </tr>
               </thead>
               <tbody>
                 {seasons.map((s, i) => (
                   <tr 
                     key={i} 
-                    className="border-b border-slate-700 hover:bg-slate-700/50 transition-colors"
+                    className="border-b border-[#2a3046]/50 hover:bg-[#1e2438] transition-colors"
                   >
-                    {showSeasons && <td className="px-4 py-3 font-medium text-slate-100">{s.season}</td>}
-                    {showTeams && <td className="px-4 py-3 font-medium text-slate-100">{s.team ?? "-"}</td>}
-                    <td className="px-4 py-3 text-right text-slate-300">{s.games ?? "-"}</td>
-                    <td className="px-4 py-3 text-right text-slate-300">{s.games_started ?? "-"}</td>
-                    <td className="px-4 py-3 text-right text-slate-300">{s.completions ?? "-"}</td>
-                    <td className="px-4 py-3 text-right text-slate-300">{s.attempts ?? "-"}</td>
-                    <td className="px-4 py-3 text-right text-slate-300">{s.yards ?? "-"}</td>
-                    <td className="px-4 py-3 text-right text-slate-300">{s.touchdowns ?? "-"}</td>
-                    <td className="px-4 py-3 text-right text-slate-300">{s.interceptions ?? "-"}</td>
-                    <td className="px-4 py-3 text-right font-medium text-slate-100">
-                      {s.passer_rating !== null ? s.passer_rating.toFixed(1) : "-"}
+                    {showSeasons && <td className="px-4 py-3 font-mono font-medium text-white">{s.season}</td>}
+                    {showTeams && <td className="px-4 py-3 font-medium text-white">{s.team ?? "—"}</td>}
+                    <td className="px-3 py-3 text-right text-[#9ca3af] font-mono">{s.games ?? "—"}</td>
+                    <td className="px-3 py-3 text-right text-[#9ca3af] font-mono">{s.games_started ?? "—"}</td>
+                    <td className="px-3 py-3 text-right text-[#9ca3af] font-mono">{s.completions ?? "—"}</td>
+                    <td className="px-3 py-3 text-right text-[#9ca3af] font-mono">{s.attempts ?? "—"}</td>
+                    <td className="px-3 py-3 text-right text-white font-mono font-medium">{s.yards ?? "—"}</td>
+                    <td className="px-3 py-3 text-right text-[#22c55e] font-mono font-medium">{s.touchdowns ?? "—"}</td>
+                    <td className="px-3 py-3 text-right text-[#ef4444] font-mono font-medium">{s.interceptions ?? "—"}</td>
+                    <td className="px-3 py-3 text-right text-white font-mono font-medium">
+                      {s.passer_rating !== null ? s.passer_rating.toFixed(1) : "—"}
                     </td>
-                    {showAwards && <td className="px-4 py-3 text-right text-slate-300">{s.awards ?? "-"}</td>}
+                    {showAwards && <td className="px-4 py-3 text-[#f59e0b] text-xs">{s.awards ?? "—"}</td>}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        </Card>
+        </div>
 
         {/* Guess Input */}
-        <Card className="p-6 mb-8 rounded-3xl shadow-xl border-2 border-slate-700 relative bg-slate-800/80 backdrop-blur-sm">
-          <div className="flex gap-4">
+        <div className="relative z-30 glass rounded-3xl border border-[#2a3046] p-4 mb-6 animate-fade-in-up delay-400 overflow-visible">
+          <div className="flex gap-3">
             <div className="relative flex-1">
-              <Input
+              <input
+                ref={inputRef}
+                type="text"
                 value={guess}
                 onChange={e => setGuess(e.target.value)}
-                onKeyPress={handleKeyPress}
-                placeholder="Enter QB name..."
-                disabled={gameWon || gameLost}
+                onKeyDown={handleKeyDown}
                 onFocus={() => setShowSuggestions(true)}
-                className="h-14 text-lg rounded-2xl border-2 px-6 focus:ring-2 focus:ring-blue-400 bg-slate-900"
+                onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+                placeholder="Type a quarterback's name..."
+                disabled={gameWon || gameLost}
+                className="w-full h-14 px-5 rounded-2xl bg-[#161b2e] border border-[#2a3046] text-white placeholder-[#6b7280] font-medium focus:border-[#00d4aa] focus:ring-1 focus:ring-[#00d4aa] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               />
+              
+              {/* Autocomplete dropdown */}
               {showSuggestions && suggestions.length > 0 && (
-                <div className="absolute z-10 w-full bg-slate-800 border-2 border-slate-700 rounded-2xl shadow-xl mt-2 max-h-64 overflow-y-auto">
-                  {suggestions.map(name => (
+                <div className="absolute z-50 w-full mt-2 py-2 rounded-2xl bg-[#1e2438] border border-[#2a3046] shadow-2xl max-h-64 overflow-y-auto">
+                  {suggestions.map((name, idx) => (
                     <div
                       key={name}
-                      className="px-6 py-3 cursor-pointer hover:bg-slate-700 transition-colors first:rounded-t-2xl last:rounded-b-2xl text-slate-100"
-                      onClick={() => {
+                      className={`px-5 py-3 cursor-pointer transition-colors ${
+                        idx === selectedSuggestionIndex
+                          ? "bg-[#00d4aa]/10 text-[#00d4aa]"
+                          : "text-white hover:bg-[#2a3046]"
+                      }`}
+                      onMouseDown={(e) => {
+                        e.preventDefault()
                         setGuess(name)
                         setSuggestions([])
                         setShowSuggestions(false)
+                        inputRef.current?.focus()
                       }}
                     >
                       {name}
@@ -514,97 +619,141 @@ ${window.location.origin}`
                 </div>
               )}
             </div>
-            <Button 
+            
+            <button 
               onClick={submitGuess}
               disabled={!guess.trim() || gameWon || gameLost}
-              className="h-14 px-8 rounded-2xl text-lg font-semibold bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 shadow-lg hover:shadow-xl transition-all hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+              className="h-14 px-8 rounded-2xl font-semibold bg-gradient-to-r from-[#00d4aa] to-[#00b894] text-[#0c0f1a] hover:opacity-90 transition-all active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed shadow-lg glow-sm"
             >
               Guess
-            </Button>
+            </button>
           </div>
-        </Card>
+        </div>
 
         {/* Guesses List */}
         {guesses.length > 0 && (
-          <Card className="p-6 mb-8 rounded-3xl shadow-xl border-2 border-slate-700 bg-slate-800/80 backdrop-blur-sm">
-            <h2 className="text-2xl font-bold text-white mb-4">Your Guesses</h2>
+          <div className="space-y-2 mb-6 animate-fade-in-up">
+            {guesses.map((g, i) => {
+              let bgClass = "bg-[#374151] border-[#4b5563]"
+              let textClass = "text-[#9ca3af]"
+              
+              if (g.correct) {
+                bgClass = "bg-gradient-to-r from-[#22c55e] to-[#16a34a] border-transparent"
+                textClass = "text-white"
+              } else if (g.teams_overlap) {
+                bgClass = "bg-gradient-to-r from-[#f59e0b] to-[#d97706] border-transparent"
+                textClass = "text-white"
+              } else if (g.era === "same") {
+                bgClass = "bg-gradient-to-r from-[#eab308] to-[#ca8a04] border-transparent"
+                textClass = "text-[#0c0f1a]"
+              }
 
-            <div className="space-y-3">
-              {guesses.map((g, i) => {
-                let bgClass = "bg-slate-700 text-slate-300"
-                if (g.correct) bgClass = "bg-gradient-to-r from-green-500 to-emerald-500 text-white shadow-lg"
-                else if (g.teams_overlap) bgClass = "bg-gradient-to-r from-orange-400 to-amber-400 text-white shadow-md"
-                else if (g.era === "same") bgClass = "bg-gradient-to-r from-yellow-400 to-yellow-500 text-slate-900 shadow-md"
-
-                return (
-                  <div
-                    key={i}
-                    className={`flex items-center justify-between px-6 py-4 rounded-2xl font-semibold text-lg transition-all ${bgClass}`}
-                  >
-                    <span>{g.name}</span>
-                    <div className="flex items-center gap-3">
-                      {g.pfr_id && (
-                        <a
-                          href={getPfrUrl(g.pfr_id)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="hover:opacity-70 transition-opacity"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <ExternalLink className="w-5 h-5" />
-                        </a>
-                      )}
-                      {g.correct && <span className="text-2xl">✓</span>}
-                    </div>
+              return (
+                <div
+                  key={i}
+                  className={`flex items-center justify-between px-5 py-4 rounded-2xl font-medium border transition-all ${bgClass} ${textClass}`}
+                  style={{ animationDelay: `${i * 50}ms` }}
+                >
+                  <span className="font-semibold">{g.name}</span>
+                  <div className="flex items-center gap-3">
+                    {g.pfr_id && (
+                      <a
+                        href={getPfrUrl(g.pfr_id)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="opacity-70 hover:opacity-100 transition-opacity"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <ExternalLink className="w-4 h-4" />
+                      </a>
+                    )}
+                    {g.correct && <Check className="w-5 h-5" />}
                   </div>
-                )
-              })}
-            </div>
-          </Card>
+                </div>
+              )
+            })}
+          </div>
         )}
 
         {/* Game End Card */}
         {(gameWon || gameLost) && (
-          <Card className="p-8 rounded-3xl shadow-2xl border-2 border-slate-700 bg-slate-800/90 backdrop-blur-sm">
-            <h2 className="text-3xl font-black mb-4 text-white">
-              {gameWon ? "🎉 Correct!" : "Game Over"}
-            </h2>
-            {gameLost && answer && (
-              <div className="mb-6">
-                <p className="text-lg text-slate-300 mb-2">
-                  The correct quarterback was{" "}
-                  <span className="font-bold text-blue-400">{answer}</span>
-                </p>
-                {answerPfrId && (
-                  <a
-                    href={getPfrUrl(answerPfrId)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-2 text-blue-400 hover:text-blue-300 transition-colors"
-                  >
-                    View on Pro Football Reference
-                    <ExternalLink className="w-4 h-4" />
-                  </a>
-                )}
+          <div className={`glass rounded-3xl border p-6 sm:p-8 animate-fade-in-up ${
+            gameWon ? "border-[#22c55e]/50" : "border-[#2a3046]"
+          }`}>
+            {gameWon && (
+              <div className="absolute inset-0 overflow-hidden rounded-3xl pointer-events-none">
+                <div className="absolute inset-0 bg-gradient-to-br from-[#22c55e]/10 via-transparent to-[#00d4aa]/10" />
               </div>
             )}
-            <div className="flex gap-3">
-              <Button 
-                onClick={handleShare} 
-                className="flex-1 gap-2 h-14 rounded-2xl text-lg font-semibold bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 shadow-lg hover:shadow-xl transition-all hover:scale-105"
-              >
-                {copied ? <Check className="w-5 h-5" /> : <Copy className="w-5 h-5" />}
-                {copied ? "Copied!" : "Share"}
-              </Button>
-              <Button 
-                onClick={() => loadQB(gameMode)} 
-                className="flex-1 h-14 rounded-2xl text-lg font-semibold bg-gradient-to-r from-emerald-500 to-green-500 hover:from-emerald-600 hover:to-green-600 shadow-lg hover:shadow-xl transition-all hover:scale-105"
-              >
-                New Game
-              </Button>
+            
+            <div className="relative text-center mb-6">
+              <div className="text-5xl mb-3">{gameWon ? "🏆" : "😔"}</div>
+              <h2 className="text-2xl sm:text-3xl font-bold text-white mb-1">
+                {gameWon ? "You Got It!" : "Game Over"}
+              </h2>
+              {gameLost && answer && (
+                <p className="text-[#6b7280]">
+                  The answer was <span className="text-[#00d4aa] font-semibold">{answer}</span>
+                </p>
+              )}
             </div>
-          </Card>
+
+            {/* Stats summary */}
+            <div className="grid grid-cols-3 gap-3 mb-6">
+              <div className="text-center p-4 rounded-2xl bg-[#161b2e] border border-[#2a3046]">
+                <div className="text-2xl font-bold text-white">{guesses.length}</div>
+                <div className="text-xs text-[#6b7280]">Guesses</div>
+              </div>
+              <div className="text-center p-4 rounded-2xl bg-[#161b2e] border border-[#2a3046]">
+                <div className="text-2xl font-bold text-white">{hintsUsed}</div>
+                <div className="text-xs text-[#6b7280]">Hints</div>
+              </div>
+              <div className="text-center p-4 rounded-2xl bg-[#161b2e] border border-[#2a3046]">
+                <div className="text-2xl font-bold text-white">{gameMode === "daily" ? "📅" : "🔄"}</div>
+                <div className="text-xs text-[#6b7280]">Mode</div>
+              </div>
+            </div>
+
+            {answerPfrId && (
+              <a
+                href={getPfrUrl(answerPfrId)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center justify-center gap-2 mb-6 text-[#00d4aa] hover:underline font-medium"
+              >
+                View on Pro Football Reference
+                <ExternalLink className="w-4 h-4" />
+              </a>
+            )}
+
+            <div className="flex gap-3">
+              <button 
+                onClick={handleShare} 
+                className="flex-1 flex items-center justify-center gap-2 py-4 px-6 rounded-2xl font-semibold bg-[#161b2e] border border-[#2a3046] text-white hover:bg-[#1e2438] transition-all active:scale-[0.98]"
+              >
+                {copied ? <Check className="w-5 h-5 text-[#22c55e]" /> : <Copy className="w-5 h-5" />}
+                {copied ? "Copied!" : "Share"}
+              </button>
+              <button 
+                onClick={() => loadQB(gameMode)} 
+                className="flex-1 flex items-center justify-center gap-2 py-4 px-6 rounded-2xl font-semibold bg-gradient-to-r from-[#00d4aa] to-[#00b894] text-[#0c0f1a] hover:opacity-90 transition-all active:scale-[0.98] shadow-lg"
+              >
+                <RefreshCw className="w-5 h-5" />
+                New Game
+              </button>
+            </div>
+          </div>
         )}
+
+        {/* Footer */}
+        <footer className="text-center mt-8 pb-4">
+          <p className="text-[#6b7280] text-xs">
+            Data from{" "}
+            <a href="https://www.pro-football-reference.com" target="_blank" rel="noopener noreferrer" className="text-[#00d4aa] hover:underline">
+              Pro Football Reference
+            </a>
+          </p>
+        </footer>
       </div>
     </div>
   )

@@ -158,16 +158,19 @@ def get_player_teams(conn, player_id):
 
 
 def create_session(conn, player_id, game_mode="unlimited"):
-    """Create a new game session"""
+    """Create a new game session with immediate commit"""
     session_id = str(uuid.uuid4())
+    now = datetime.now()
     conn.execute(
         """
         INSERT INTO game_sessions (session_id, player_id, game_mode, created_at, last_accessed)
         VALUES (?, ?, ?, ?, ?)
         """,
-        (session_id, player_id, game_mode, datetime.now(), datetime.now())
+        (session_id, player_id, game_mode, now, now)
     )
     conn.commit()
+    # Small delay to ensure session is fully committed before returning
+    # This helps prevent race conditions on mobile with rapid requests
     return session_id
 
 
@@ -199,16 +202,34 @@ def get_session_player(conn, session_id):
     return row[0]
 
 
+# Track last cleanup time to avoid running too frequently
+_last_cleanup_time = None
+
 def cleanup_old_sessions():
-    """Remove sessions older than 24 hours"""
+    """Remove sessions older than 72 hours, but only run cleanup every 5 minutes max"""
+    global _last_cleanup_time
+    
+    now = datetime.now()
+    # Only run cleanup if it's been at least 5 minutes since last cleanup
+    if _last_cleanup_time is not None:
+        time_since_cleanup = (now - _last_cleanup_time).total_seconds()
+        if time_since_cleanup < 300:  # 5 minutes
+            return
+    
+    _last_cleanup_time = now
+    
     with sqlite3.connect(DB_PATH) as conn:
-        cutoff = datetime.now() - timedelta(hours=24)
+        # Delete sessions older than 72 hours
+        cutoff = datetime.now() - timedelta(hours=72)
+        # Safety: Never delete sessions less than 2 hours old, even if they appear "old"
+        min_age = datetime.now() - timedelta(hours=2)
         conn.execute(
             """
             DELETE FROM game_sessions
             WHERE last_accessed < ?
+            AND created_at < ?
             """,
-            (cutoff,)
+            (cutoff, min_age)
         )
         conn.commit()
 
