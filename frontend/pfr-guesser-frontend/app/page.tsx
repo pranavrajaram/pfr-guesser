@@ -1,21 +1,31 @@
 "use client"
 
 import { useState, useEffect, useRef } from "react"
-import { Loader2, Check, Copy, ExternalLink, HelpCircle, Trophy, Target, Zap, X, RefreshCw } from "lucide-react"
+import { Loader2, Check, Copy, ExternalLink, HelpCircle, Trophy, Target, Zap, X, RefreshCw, Flag } from "lucide-react"
 
 interface SeasonStats {
   season: number
   team: string | null
   games: number | null
-  games_started: number | null
-  completions: number | null
-  attempts: number | null
-  yards: number | null
-  touchdowns: number | null
-  interceptions: number | null
-  passer_rating: number | null
   awards: string | null
+  // QB-specific
+  games_started?: number | null
+  completions?: number | null
+  attempts?: number | null
+  yards?: number | null
+  touchdowns?: number | null
+  interceptions?: number | null
+  passer_rating?: number | null
+  // WR-specific
+  targets?: number | null
+  receptions?: number | null
+  yards_per_reception?: number | null
+  // RB-specific
+  yards_per_attempt?: number | null
+  receiving_yards?: number | null
 }
+
+type Position = "QB" | "WR" | "RB"
 
 interface GuessResult {
   name: string
@@ -36,6 +46,7 @@ export default function QBGuessingGame() {
 
   const [gameMode, setGameMode] = useState<GameMode>("daily")
   const [sessionId, setSessionId] = useState<string | null>(null)
+  const [position, setPosition] = useState<Position>("QB")
   const [seasons, setSeasons] = useState<SeasonStats[]>([])
   const [guess, setGuess] = useState("")
   const [guesses, setGuesses] = useState<GuessResult[]>([])
@@ -45,6 +56,7 @@ export default function QBGuessingGame() {
   const [gameLost, setGameLost] = useState(false)
   const [answer, setAnswer] = useState<string | null>(null)
   const [answerPfrId, setAnswerPfrId] = useState<string | null>(null)
+  const [answerPosition, setAnswerPosition] = useState<Position | null>(null)
   const [copied, setCopied] = useState(false)
 
   const [showSeasons, setShowSeasons] = useState(false)
@@ -59,7 +71,7 @@ export default function QBGuessingGame() {
   const hintsUsed = [showSeasons, showTeams, showAwards].filter(Boolean).length
 
   useEffect(() => {
-    loadQB("daily")
+    loadGame("daily")
   }, [])
 
   useEffect(() => {
@@ -87,7 +99,7 @@ export default function QBGuessingGame() {
     return () => clearTimeout(timeout)
   }, [guess])
 
-  const loadQB = async (mode: GameMode) => {
+  const loadGame = async (mode: GameMode) => {
     setLoading(true)
     setError(null)
     try {
@@ -103,6 +115,7 @@ export default function QBGuessingGame() {
       const data = await res.json()
       setSessionId(data.session_id)
       setSeasons(data.seasons)
+      setPosition(data.position || "QB")
       setGameMode(mode)
       
       setGuesses([])
@@ -110,13 +123,14 @@ export default function QBGuessingGame() {
       setGameLost(false)
       setAnswer(null)
       setAnswerPfrId(null)
+      setAnswerPosition(null)
       setGuess("")
       setShowSeasons(false)
       setShowTeams(false)
       setShowAwards(false)
       
     } catch (err) {
-      console.error("Failed to load QB", err)
+      console.error("Failed to load game", err)
       setError("Failed to load game. Please refresh the page.")
     } finally {
       setLoading(false)
@@ -139,7 +153,7 @@ export default function QBGuessingGame() {
         
         if (res.status === 404 && errorMessage.includes("Session not found")) {
           console.log("Session expired, reloading game...")
-          await loadQB(gameMode)
+          await loadGame(gameMode)
           setError("Your session expired. A new game has been loaded!")
           setTimeout(() => setError(null), 3000)
           return
@@ -151,6 +165,7 @@ export default function QBGuessingGame() {
       const data = await res.json()
       setAnswer(data.name)
       setAnswerPfrId(data.pfr_id)
+      setAnswerPosition(data.position || null)
       setGameLost(true)
     } catch (err) {
       console.error("Failed to reveal answer", err)
@@ -178,7 +193,7 @@ export default function QBGuessingGame() {
         
         if (res.status === 404 && errorMessage.includes("Session not found")) {
           console.log("Session expired, reloading game...")
-          await loadQB(gameMode)
+          await loadGame(gameMode)
           setError("Your session expired. A new game has been loaded!")
           setTimeout(() => setError(null), 3000)
           return
@@ -255,9 +270,16 @@ export default function QBGuessingGame() {
       return "⚫"
     }).join("")
 
+    // Build list of hints used
+    const hintsList = []
+    if (showSeasons) hintsList.push("Seasons")
+    if (showTeams) hintsList.push("Teams")
+    if (showAwards) hintsList.push("Awards")
+    const hintsText = hintsList.length > 0 ? ` (${hintsList.join(", ")})` : ""
+
     const shareText = `${modeEmoji} Drake Maye-dle ${resultEmoji}
 ${guessEmojis}
-${guesses.length}/${MAX_GUESSES} guesses | ${hintsUsed} hints
+${guesses.length}/${MAX_GUESSES} guesses | ${hintsUsed} hint${hintsUsed !== 1 ? "s" : ""}${hintsText}
 ${window.location.origin}`
 
     try {
@@ -271,7 +293,7 @@ ${window.location.origin}`
 
   const switchMode = (mode: GameMode) => {
     if (mode !== gameMode) {
-      loadQB(mode)
+      loadGame(mode)
     }
   }
 
@@ -307,7 +329,7 @@ ${window.location.origin}`
           <h2 className="text-2xl font-bold text-white mb-2">Oops!</h2>
           <p className="text-[#6b7280] mb-6">{error}</p>
           <button 
-            onClick={() => loadQB(gameMode)}
+            onClick={() => loadGame(gameMode)}
             className="w-full py-4 px-6 rounded-2xl font-semibold bg-gradient-to-r from-[#00d4aa] to-[#00b894] text-[#0c0f1a] hover:opacity-90 transition-all active:scale-[0.98]"
           >
             Try Again
@@ -334,7 +356,7 @@ ${window.location.origin}`
             </div>
             <div>
               <h1 className="text-2xl sm:text-3xl font-bold gradient-text">Drake Maye-dle</h1>
-              <p className="text-sm text-[#6b7280] hidden sm:block">Guess the QB from their stats</p>
+              <p className="text-sm text-[#6b7280] hidden sm:block">Guess the player from their stats</p>
             </div>
           </div>
           
@@ -377,7 +399,7 @@ ${window.location.origin}`
 
                 <div className="text-center mb-6">
                   <h2 className="text-3xl font-bold gradient-text mb-2">How to Play</h2>
-                  <p className="text-[#6b7280]">Guess the mystery quarterback</p>
+                  <p className="text-[#6b7280]">Guess the mystery player from their stats</p>
                 </div>
 
                 <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
@@ -388,7 +410,7 @@ ${window.location.origin}`
                     <div>
                       <h3 className="font-semibold text-white mb-1">Make Guesses</h3>
                       <p className="text-sm text-[#6b7280]">
-                        You have <span className="text-[#00d4aa] font-semibold">{MAX_GUESSES} attempts</span> to identify the QB from their career stats. The player pool includes all QBs with 2,000+ passing yards since 2010.
+                        You have <span className="text-[#00d4aa] font-semibold">{MAX_GUESSES} attempts</span> to identify the player from their career stats. The pool includes QBs (2,000+ passing yards), WRs (1,500+ receiving yards), and RBs (1,500+ rushing yards) since 2010.
                       </p>
                     </div>
                   </div>
@@ -534,6 +556,18 @@ ${window.location.origin}`
 
         {/* Stats Table */}
         <div className="glass rounded-3xl border border-[#2a3046] overflow-hidden mb-6 animate-fade-in-up delay-300">
+          {/* Position badge */}
+          <div className="px-4 py-2 bg-[#161b2e] border-b border-[#2a3046] flex items-center gap-2">
+            <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+              position === "QB" 
+                ? "bg-[#7c3aed]/20 text-[#a78bfa]" 
+                : position === "WR"
+                ? "bg-[#f59e0b]/20 text-[#fbbf24]"
+                : "bg-[#22c55e]/20 text-[#4ade80]"
+            }`}>
+              {position === "QB" ? "🏈 Quarterback" : position === "WR" ? "🎯 Wide Receiver" : "🏃 Running Back"}
+            </span>
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -541,13 +575,36 @@ ${window.location.origin}`
                   {showSeasons && <th className="px-4 py-4 text-left font-semibold text-[#00d4aa]">Year</th>}
                   {showTeams && <th className="px-4 py-4 text-left font-semibold text-[#00d4aa]">Team</th>}
                   <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">G</th>
-                  <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">GS</th>
-                  <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">Cmp</th>
-                  <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">Att</th>
-                  <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">Yds</th>
-                  <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">TD</th>
-                  <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">Int</th>
-                  <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">Rate</th>
+                  {position === "QB" && (
+                    <>
+                      <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">GS</th>
+                      <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">Cmp</th>
+                      <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">Att</th>
+                      <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">Yds</th>
+                      <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">TD</th>
+                      <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">Int</th>
+                      <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">Rate</th>
+                    </>
+                  )}
+                  {position === "WR" && (
+                    <>
+                      <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">Tgt</th>
+                      <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">Rec</th>
+                      <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">Yds</th>
+                      <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">Y/R</th>
+                      <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">TD</th>
+                    </>
+                  )}
+                  {position === "RB" && (
+                    <>
+                      <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">Att</th>
+                      <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">Yds</th>
+                      <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">Y/A</th>
+                      <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">TD</th>
+                      <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">Rec</th>
+                      <th className="px-3 py-4 text-right font-semibold text-[#6b7280]">RecYds</th>
+                    </>
+                  )}
                   {showAwards && <th className="px-4 py-4 text-left font-semibold text-[#00d4aa]">Awards</th>}
                 </tr>
               </thead>
@@ -560,15 +617,42 @@ ${window.location.origin}`
                     {showSeasons && <td className="px-4 py-3 font-mono font-medium text-white">{s.season}</td>}
                     {showTeams && <td className="px-4 py-3 font-medium text-white">{s.team ?? "—"}</td>}
                     <td className="px-3 py-3 text-right text-[#9ca3af] font-mono">{s.games ?? "—"}</td>
-                    <td className="px-3 py-3 text-right text-[#9ca3af] font-mono">{s.games_started ?? "—"}</td>
-                    <td className="px-3 py-3 text-right text-[#9ca3af] font-mono">{s.completions ?? "—"}</td>
-                    <td className="px-3 py-3 text-right text-[#9ca3af] font-mono">{s.attempts ?? "—"}</td>
-                    <td className="px-3 py-3 text-right text-white font-mono font-medium">{s.yards ?? "—"}</td>
-                    <td className="px-3 py-3 text-right text-[#22c55e] font-mono font-medium">{s.touchdowns ?? "—"}</td>
-                    <td className="px-3 py-3 text-right text-[#ef4444] font-mono font-medium">{s.interceptions ?? "—"}</td>
-                    <td className="px-3 py-3 text-right text-white font-mono font-medium">
-                      {s.passer_rating !== null ? s.passer_rating.toFixed(1) : "—"}
-                    </td>
+                    {position === "QB" && (
+                      <>
+                        <td className="px-3 py-3 text-right text-[#9ca3af] font-mono">{s.games_started ?? "—"}</td>
+                        <td className="px-3 py-3 text-right text-[#9ca3af] font-mono">{s.completions ?? "—"}</td>
+                        <td className="px-3 py-3 text-right text-[#9ca3af] font-mono">{s.attempts ?? "—"}</td>
+                        <td className="px-3 py-3 text-right text-white font-mono font-medium">{s.yards ?? "—"}</td>
+                        <td className="px-3 py-3 text-right text-[#22c55e] font-mono font-medium">{s.touchdowns ?? "—"}</td>
+                        <td className="px-3 py-3 text-right text-[#ef4444] font-mono font-medium">{s.interceptions ?? "—"}</td>
+                        <td className="px-3 py-3 text-right text-white font-mono font-medium">
+                          {s.passer_rating != null ? Number(s.passer_rating).toFixed(1) : "—"}
+                        </td>
+                      </>
+                    )}
+                    {position === "WR" && (
+                      <>
+                        <td className="px-3 py-3 text-right text-[#9ca3af] font-mono">{s.targets ?? "—"}</td>
+                        <td className="px-3 py-3 text-right text-[#9ca3af] font-mono">{s.receptions ?? "—"}</td>
+                        <td className="px-3 py-3 text-right text-white font-mono font-medium">{s.yards ?? "—"}</td>
+                        <td className="px-3 py-3 text-right text-[#9ca3af] font-mono">
+                          {s.yards_per_reception != null ? Number(s.yards_per_reception).toFixed(1) : "—"}
+                        </td>
+                        <td className="px-3 py-3 text-right text-[#22c55e] font-mono font-medium">{s.touchdowns ?? "—"}</td>
+                      </>
+                    )}
+                    {position === "RB" && (
+                      <>
+                        <td className="px-3 py-3 text-right text-[#9ca3af] font-mono">{s.attempts ?? "—"}</td>
+                        <td className="px-3 py-3 text-right text-white font-mono font-medium">{s.yards ?? "—"}</td>
+                        <td className="px-3 py-3 text-right text-[#9ca3af] font-mono">
+                          {s.yards_per_attempt != null ? Number(s.yards_per_attempt).toFixed(1) : "—"}
+                        </td>
+                        <td className="px-3 py-3 text-right text-[#22c55e] font-mono font-medium">{s.touchdowns ?? "—"}</td>
+                        <td className="px-3 py-3 text-right text-[#9ca3af] font-mono">{s.receptions ?? "—"}</td>
+                        <td className="px-3 py-3 text-right text-[#9ca3af] font-mono">{s.receiving_yards ?? "—"}</td>
+                      </>
+                    )}
                     {showAwards && <td className="px-4 py-3 text-[#f59e0b] text-xs">{s.awards ?? "—"}</td>}
                   </tr>
                 ))}
@@ -589,7 +673,7 @@ ${window.location.origin}`
                 onKeyDown={handleKeyDown}
                 onFocus={() => setShowSuggestions(true)}
                 onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
-                placeholder="Type a quarterback's name..."
+                placeholder="Type a player's name..."
                 disabled={gameWon || gameLost}
                 className="w-full h-14 px-5 rounded-2xl bg-[#161b2e] border border-[#2a3046] text-white placeholder-[#6b7280] font-medium focus:border-[#00d4aa] focus:ring-1 focus:ring-[#00d4aa] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               />
@@ -626,6 +710,15 @@ ${window.location.origin}`
               className="h-14 px-8 rounded-2xl font-semibold bg-gradient-to-r from-[#00d4aa] to-[#00b894] text-[#0c0f1a] hover:opacity-90 transition-all active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed shadow-lg glow-sm"
             >
               Guess
+            </button>
+            <button 
+              onClick={revealAnswer}
+              disabled={gameWon || gameLost}
+              className="h-14 px-5 rounded-2xl font-semibold bg-[#1e2438] border border-[#2a3046] text-[#6b7280] hover:text-[#ef4444] hover:border-[#ef4444]/50 transition-all active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
+              title="Give up and reveal the answer"
+            >
+              <Flag className="w-4 h-4" />
+              <span className="hidden sm:inline">Give Up</span>
             </button>
           </div>
         </div>
@@ -694,6 +787,17 @@ ${window.location.origin}`
               {gameLost && answer && (
                 <p className="text-[#6b7280]">
                   The answer was <span className="text-[#00d4aa] font-semibold">{answer}</span>
+                  {answerPosition && (
+                    <span className={`ml-2 px-2 py-0.5 rounded-full text-xs font-bold ${
+                      answerPosition === "QB" 
+                        ? "bg-[#7c3aed]/20 text-[#a78bfa]" 
+                        : answerPosition === "WR"
+                        ? "bg-[#f59e0b]/20 text-[#fbbf24]"
+                        : "bg-[#22c55e]/20 text-[#4ade80]"
+                    }`}>
+                      {answerPosition}
+                    </span>
+                  )}
                 </p>
               )}
             </div>
@@ -735,11 +839,11 @@ ${window.location.origin}`
                 {copied ? "Copied!" : "Share"}
               </button>
               <button 
-                onClick={() => loadQB(gameMode)} 
+                onClick={() => gameMode === "daily" ? loadGame("unlimited") : loadGame("unlimited")} 
                 className="flex-1 flex items-center justify-center gap-2 py-4 px-6 rounded-2xl font-semibold bg-gradient-to-r from-[#00d4aa] to-[#00b894] text-[#0c0f1a] hover:opacity-90 transition-all active:scale-[0.98] shadow-lg"
               >
                 <RefreshCw className="w-5 h-5" />
-                New Game
+                {gameMode === "daily" ? "Play Unlimited" : "New Game"}
               </button>
             </div>
           </div>
