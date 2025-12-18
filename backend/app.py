@@ -5,8 +5,12 @@ import numpy as np
 from fastapi.middleware.cors import CORSMiddleware
 import uuid
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import os
 import hashlib
+
+# Timezone for daily puzzle reset (Eastern Time)
+EST = ZoneInfo("America/New_York")
 
 # ----------------------
 # App setup
@@ -78,8 +82,8 @@ def clean_nan(obj):
 
 
 def get_daily_player_id(conn):
-    """Get a deterministic player ID based on today's date"""
-    today = datetime.now().date().isoformat()
+    """Get a deterministic player ID based on today's date in EST"""
+    today = datetime.now(EST).date().isoformat()
     
     # Create a hash from the date to get a consistent random seed
     seed = int(hashlib.md5(today.encode()).hexdigest(), 16) % (2**31)
