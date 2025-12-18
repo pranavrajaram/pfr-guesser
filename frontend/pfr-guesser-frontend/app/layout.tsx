@@ -15,8 +15,8 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Drake Maye-dle | QB Guessing Game",
-  description: "Guess the quarterback from their Pro Football Reference stats!",
+  title: "Drake Maye-dle | NFL Guessing Game",
+  description: "Guess the player from their Pro Football Reference stats!",
   icons: {
     icon: "🏈",
   },
