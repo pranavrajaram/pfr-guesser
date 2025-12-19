@@ -456,9 +456,9 @@ ${window.location.origin}`
                     <div>
                       <h3 className="font-semibold text-white mb-1">Game Modes</h3>
                       <p className="text-sm text-[#6b7280]">
-                        <span className="text-white">📅 Daily:</span> Same QB for everyone.
+                        <span className="text-white">📅 Daily:</span> Same player for everyone.
                         <br />
-                        <span className="text-white">🔄 Unlimited:</span> Random QBs, play forever!
+                        <span className="text-white">🔄 Unlimited:</span> Random players, play forever!
                       </p>
                     </div>
                   </div>
